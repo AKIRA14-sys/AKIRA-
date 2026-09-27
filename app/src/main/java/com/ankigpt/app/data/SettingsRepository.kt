@@ -21,7 +21,7 @@ class SettingsRepository(private val context: Context) {
 
         const val DEFAULT_BASE_URL = "https://api.openrouter.ai/v1"
         const val DEFAULT_MODEL = "deepseek/deepseek-r1:free"
-        const val DEFAULT_SYSTEM_PROMPT = "You are ANKI GPT, an elite AI assistant equipped with advanced coding capabilities, file analysis, web search skills, and system hardware diagnostic controls."
+        const val DEFAULT_SYSTEM_PROMPT = "You are AnkiGPT, an elite personal AI assistant equipped with advanced coding capabilities, file analysis, web search skills, and system hardware diagnostic controls."
     }
 
     val apiKeyFlow: Flow<String> = context.dataStore.data.map { preferences ->

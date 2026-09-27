@@ -3,6 +3,7 @@ package com.ankigpt.app.ui.screens
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
@@ -21,10 +22,12 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.ankigpt.app.R
 import com.ankigpt.app.data.*
 import com.ankigpt.app.ui.theme.*
 import kotlinx.coroutines.flow.catch
@@ -40,7 +43,6 @@ fun ChatScreen(
     deviceControlManager: DeviceControlManager,
     onNavigateToCodeStudio: (String) -> Unit
 ) {
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
 
@@ -105,7 +107,7 @@ fun ChatScreen(
 
             val apiMessages = newMessages.dropLast(1) + ChatMessage("user", fullUserPrompt)
             val assistantIndex = messages.size
-            messages = messages + ChatMessage("assistant", "⚡ Processing ANKI AI Response...")
+            messages = messages + ChatMessage("assistant", "⚡ Processing AnkiGPT Response...")
 
             var assistantResponse = ""
 
@@ -142,7 +144,7 @@ fun ChatScreen(
             .fillMaxSize()
             .padding(12.dp)
     ) {
-        // App Header Banner
+        // App Header Banner with Official AnkiGPT Logo
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
@@ -153,35 +155,43 @@ fun ChatScreen(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(16.dp),
+                    .padding(14.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
+                    Image(
+                        painter = painterResource(id = R.drawable.ic_ankigpt_logo),
+                        contentDescription = "AnkiGPT Logo",
                         modifier = Modifier
-                            .size(12.dp)
-                            .clip(CircleShape)
-                            .background(if (isGenerating) NeonPink else NeonGreen)
+                            .size(38.dp)
+                            .clip(RoundedCornerShape(8.dp))
                     )
-                    Spacer(modifier = Modifier.width(10.dp))
+                    Spacer(modifier = Modifier.width(12.dp))
                     Column {
                         Text(
-                            text = "ANKI GPT",
+                            text = "AnkiGPT",
                             fontWeight = FontWeight.Bold,
                             fontSize = 18.sp,
                             color = NeonCyan,
                             fontFamily = FontFamily.Monospace
                         )
                         Text(
-                            text = if (apiKey.isBlank()) "Gonka Router Mode (No API Key)" else "Model: $model",
+                            text = if (apiKey.isBlank()) "Gonka Router Mode" else "Model: $model",
                             fontSize = 11.sp,
                             color = TextSecondary
                         )
                     }
                 }
 
-                Row {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .size(10.dp)
+                            .clip(CircleShape)
+                            .background(if (isGenerating) NeonPink else NeonGreen)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
                     IconButton(
                         onClick = { isWebSearchActive = !isWebSearchActive }
                     ) {
@@ -210,19 +220,21 @@ fun ChatScreen(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(top = 40.dp),
+                            .padding(top = 30.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(
-                                imageVector = Icons.Default.AutoAwesome,
-                                contentDescription = null,
-                                tint = NeonCyan,
-                                modifier = Modifier.size(56.dp)
+                            Image(
+                                painter = painterResource(id = R.drawable.ic_ankigpt_logo),
+                                contentDescription = "AnkiGPT Central Emblem",
+                                modifier = Modifier
+                                    .size(80.dp)
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .border(1.dp, GlassBorder, RoundedCornerShape(16.dp))
                             )
-                            Spacer(modifier = Modifier.height(12.dp))
+                            Spacer(modifier = Modifier.height(14.dp))
                             Text(
-                                text = "ANKI GPT Ready",
+                                text = "AnkiGPT Personal AI",
                                 fontSize = 20.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = TextPrimary
@@ -271,7 +283,7 @@ fun ChatScreen(
                                 modifier = Modifier.fillMaxWidth()
                             ) {
                                 Text(
-                                    text = if (isUser) "YOU" else "ANKI AI",
+                                    text = if (isUser) "YOU" else "AnkiGPT",
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = if (isUser) NeonCyan else NeonPurple
@@ -377,7 +389,7 @@ fun ChatScreen(
             OutlinedTextField(
                 value = inputText,
                 onValueChange = { inputText = it },
-                placeholder = { Text("Ask ANKI GPT...", color = TextSecondary) },
+                placeholder = { Text("Ask AnkiGPT...", color = TextSecondary) },
                 modifier = Modifier
                     .weight(1f)
                     .clip(RoundedCornerShape(24.dp)),
