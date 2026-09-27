@@ -21,7 +21,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -29,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ankigpt.app.R
 import com.ankigpt.app.data.*
+import com.ankigpt.app.data.tts.AnkiTtsManager
 import com.ankigpt.app.ui.theme.*
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.launch
@@ -41,6 +41,8 @@ fun ChatScreen(
     webSearchService: WebSearchService,
     fileAccessService: FileAccessService,
     deviceControlManager: DeviceControlManager,
+    commandRouter: AnkiCommandRouter,
+    ankiTtsManager: AnkiTtsManager,
     onNavigateToCodeStudio: (String) -> Unit
 ) {
     val scope = rememberCoroutineScope()
@@ -50,6 +52,10 @@ fun ChatScreen(
     val baseUrl by settingsRepository.baseUrlFlow.collectAsState(initial = SettingsRepository.DEFAULT_BASE_URL)
     val model by settingsRepository.selectedModelFlow.collectAsState(initial = SettingsRepository.DEFAULT_MODEL)
     val systemPrompt by settingsRepository.systemPromptFlow.collectAsState(initial = SettingsRepository.DEFAULT_SYSTEM_PROMPT)
+    val ttsProviderType by settingsRepository.ttsProviderFlow.collectAsState(initial = SettingsRepository.DEFAULT_TTS_PROVIDER)
+    val geminiApiKey by settingsRepository.geminiApiKeyFlow.collectAsState(initial = "")
+    val elevenLabsApiKey by settingsRepository.elevenLabsApiKeyFlow.collectAsState(initial = "")
+    val elevenLabsVoiceId by settingsRepository.elevenLabsVoiceIdFlow.collectAsState(initial = "21m00Tcm4TlvDq8ikWAM")
 
     var messages by remember { mutableStateOf(listOf<ChatMessage>()) }
     var inputText by remember { mutableStateOf("") }
@@ -71,14 +77,26 @@ fun ChatScreen(
         }
     }
 
-    fun sendMessage() {
-        if (inputText.isBlank() && attachedFileContent == null) return
+    fun speakResponse(text: String) {
+        scope.launch {
+            ankiTtsManager.speak(
+                text = text,
+                selectedProviderType = ttsProviderType,
+                geminiApiKey = geminiApiKey,
+                elevenLabsApiKey = elevenLabsApiKey,
+                elevenLabsVoiceId = elevenLabsVoiceId
+            )
+        }
+    }
+
+    fun processUserInput(promptText: String) {
+        if (promptText.isBlank() && attachedFileContent == null) return
 
         val userPrompt = buildString {
             if (attachedFileName != null && attachedFileContent != null) {
                 append("[ATTACHED FILE: $attachedFileName]\n```\n$attachedFileContent\n```\n\n")
             }
-            append(inputText.trim())
+            append(promptText.trim())
         }
 
         val newMessages = messages.toMutableList().apply {
@@ -86,56 +104,70 @@ fun ChatScreen(
         }
         messages = newMessages
 
-        val currentInput = inputText
+        val currentInput = promptText
         inputText = ""
         attachedFileName = null
         attachedFileContent = null
-        isGenerating = true
         deviceControlManager.triggerVibration(40)
 
-        scope.launch {
-            listState.animateScrollToItem((messages.size - 1).coerceAtLeast(0))
+        // Pass through Command Router
+        val routeResult = commandRouter.processCommand(currentInput)
 
-            var fullUserPrompt = userPrompt
-            if (isWebSearchActive) {
-                val searchResults = webSearchService.searchWeb(currentInput)
-                val searchSummary = searchResults.joinToString("\n\n") {
-                    "Title: ${it.title}\nURL: ${it.url}\nSnippet: ${it.snippet}"
-                }
-                fullUserPrompt = "Context from Web Search:\n$searchSummary\n\nUser Question: $userPrompt"
+        when (routeResult) {
+            is CommandResult.LocalAction -> {
+                messages = messages + ChatMessage("assistant", "⚡ [Local Action] ${routeResult.responseText}")
+                speakResponse(routeResult.responseText)
             }
+            is CommandResult.AiRequest -> {
+                isGenerating = true
+                scope.launch {
+                    listState.animateScrollToItem((messages.size - 1).coerceAtLeast(0))
 
-            val apiMessages = newMessages.dropLast(1) + ChatMessage("user", fullUserPrompt)
-            val assistantIndex = messages.size
-            messages = messages + ChatMessage("assistant", "⚡ Processing AnkiGPT Response...")
+                    var fullUserPrompt = userPrompt
+                    if (isWebSearchActive) {
+                        val searchResults = webSearchService.searchWeb(currentInput)
+                        val searchSummary = searchResults.joinToString("\n\n") {
+                            "Title: ${it.title}\nURL: ${it.url}\nSnippet: ${it.snippet}"
+                        }
+                        fullUserPrompt = "Context from Web Search:\n$searchSummary\n\nUser Question: $userPrompt"
+                    }
 
-            var assistantResponse = ""
+                    val apiMessages = newMessages.dropLast(1) + ChatMessage("user", fullUserPrompt)
+                    val assistantIndex = messages.size
+                    messages = messages + ChatMessage("assistant", "⚡ Processing AnkiGPT Response...")
 
-            routerApiService.streamChatCompletion(
-                baseUrl = baseUrl,
-                apiKey = apiKey,
-                model = model,
-                systemPrompt = systemPrompt,
-                messages = apiMessages
-            ).catch { e ->
-                isGenerating = false
-                val errorText = "\n⚠️ Error: ${e.localizedMessage ?: "Connection failed. Please verify API Key in Settings."}"
-                messages = messages.toMutableList().apply {
-                    if (size > assistantIndex) {
-                        this[assistantIndex] = ChatMessage("assistant", assistantResponse + errorText)
+                    var assistantResponse = ""
+
+                    routerApiService.streamChatCompletion(
+                        baseUrl = baseUrl,
+                        apiKey = apiKey,
+                        model = model,
+                        systemPrompt = systemPrompt,
+                        messages = apiMessages
+                    ).catch { e ->
+                        isGenerating = false
+                        val errorText = "\n⚠️ Error: ${e.localizedMessage ?: "Connection failed. Please verify API Key in Settings."}"
+                        messages = messages.toMutableList().apply {
+                            if (size > assistantIndex) {
+                                this[assistantIndex] = ChatMessage("assistant", assistantResponse + errorText)
+                            }
+                        }
+                    }.collect { chunk ->
+                        assistantResponse += chunk
+                        messages = messages.toMutableList().apply {
+                            if (size > assistantIndex) {
+                                this[assistantIndex] = ChatMessage("assistant", assistantResponse)
+                            }
+                        }
+                        listState.animateScrollToItem(assistantIndex)
+                    }
+
+                    isGenerating = false
+                    if (assistantResponse.isNotBlank()) {
+                        speakResponse(assistantResponse.take(300))
                     }
                 }
-            }.collect { chunk ->
-                assistantResponse += chunk
-                messages = messages.toMutableList().apply {
-                    if (size > assistantIndex) {
-                        this[assistantIndex] = ChatMessage("assistant", assistantResponse)
-                    }
-                }
-                listState.animateScrollToItem(assistantIndex)
             }
-
-            isGenerating = false
         }
     }
 
@@ -144,7 +176,7 @@ fun ChatScreen(
             .fillMaxSize()
             .padding(12.dp)
     ) {
-        // App Header Banner with Official AnkiGPT Logo
+        // App Header Banner
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
@@ -177,7 +209,7 @@ fun ChatScreen(
                             fontFamily = FontFamily.Monospace
                         )
                         Text(
-                            text = if (apiKey.isBlank()) "Gonka Router Mode" else "Model: $model",
+                            text = "Personal Assistant Mode",
                             fontSize = 11.sp,
                             color = TextSecondary
                         )
@@ -234,13 +266,13 @@ fun ChatScreen(
                             )
                             Spacer(modifier = Modifier.height(14.dp))
                             Text(
-                                text = "AnkiGPT Personal AI",
+                                text = "AnkiGPT Personal Assistant",
                                 fontSize = 20.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = TextPrimary
                             )
                             Text(
-                                text = "Ask coding questions, search the web, analyze files, or control hardware.",
+                                text = "Try: \"open whatsapp\", \"what's the time\", \"battery percentage\", or ask any complex AI question.",
                                 fontSize = 12.sp,
                                 color = TextSecondary,
                                 modifier = Modifier.padding(horizontal = 32.dp, vertical = 8.dp)
@@ -292,7 +324,7 @@ fun ChatScreen(
                                 if (!isUser) {
                                     Row {
                                         IconButton(
-                                            onClick = { deviceControlManager.speakText(msg.content) },
+                                            onClick = { speakResponse(msg.content) },
                                             modifier = Modifier.size(24.dp)
                                         ) {
                                             Icon(
@@ -405,7 +437,7 @@ fun ChatScreen(
             Spacer(modifier = Modifier.width(8.dp))
 
             IconButton(
-                onClick = { sendMessage() },
+                onClick = { processUserInput(inputText) },
                 enabled = !isGenerating && (inputText.isNotBlank() || attachedFileContent != null),
                 modifier = Modifier
                     .size(48.dp)

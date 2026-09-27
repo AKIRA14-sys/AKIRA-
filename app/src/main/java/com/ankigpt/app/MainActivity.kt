@@ -3,7 +3,6 @@ package com.ankigpt.app
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -15,6 +14,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import com.ankigpt.app.data.*
+import com.ankigpt.app.data.tts.AnkiTtsManager
 import com.ankigpt.app.ui.components.GlowBackground
 import com.ankigpt.app.ui.screens.*
 import com.ankigpt.app.ui.theme.*
@@ -26,6 +26,9 @@ class MainActivity : ComponentActivity() {
     private lateinit var webSearchService: WebSearchService
     private lateinit var fileAccessService: FileAccessService
     private lateinit var deviceControlManager: DeviceControlManager
+    private lateinit var appResolver: AnkiAppResolver
+    private lateinit var commandRouter: AnkiCommandRouter
+    private lateinit var ankiTtsManager: AnkiTtsManager
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -35,6 +38,9 @@ class MainActivity : ComponentActivity() {
         webSearchService = WebSearchService()
         fileAccessService = FileAccessService(applicationContext)
         deviceControlManager = DeviceControlManager(applicationContext)
+        appResolver = AnkiAppResolver(applicationContext)
+        commandRouter = AnkiCommandRouter(appResolver, deviceControlManager)
+        ankiTtsManager = AnkiTtsManager(applicationContext, deviceControlManager)
 
         setContent {
             AnkiGptTheme {
@@ -43,7 +49,9 @@ class MainActivity : ComponentActivity() {
                     routerApiService = routerApiService,
                     webSearchService = webSearchService,
                     fileAccessService = fileAccessService,
-                    deviceControlManager = deviceControlManager
+                    deviceControlManager = deviceControlManager,
+                    commandRouter = commandRouter,
+                    ankiTtsManager = ankiTtsManager
                 )
             }
         }
@@ -52,6 +60,7 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         deviceControlManager.shutdown()
+        ankiTtsManager.stop()
     }
 }
 
@@ -68,7 +77,9 @@ fun AnkiGptAppMain(
     routerApiService: RouterApiService,
     webSearchService: WebSearchService,
     fileAccessService: FileAccessService,
-    deviceControlManager: DeviceControlManager
+    deviceControlManager: DeviceControlManager,
+    commandRouter: AnkiCommandRouter,
+    ankiTtsManager: AnkiTtsManager
 ) {
     var selectedTab by remember { mutableStateOf(NavigationTab.CHAT) }
     var codeStudioSnippet by remember { mutableStateOf("") }
@@ -117,6 +128,8 @@ fun AnkiGptAppMain(
                         webSearchService = webSearchService,
                         fileAccessService = fileAccessService,
                         deviceControlManager = deviceControlManager,
+                        commandRouter = commandRouter,
+                        ankiTtsManager = ankiTtsManager,
                         onNavigateToCodeStudio = { snippet ->
                             codeStudioSnippet = snippet
                             selectedTab = NavigationTab.CODE
@@ -131,7 +144,8 @@ fun AnkiGptAppMain(
                     )
                     NavigationTab.SETTINGS -> SettingsScreen(
                         settingsRepository = settingsRepository,
-                        deviceControlManager = deviceControlManager
+                        deviceControlManager = deviceControlManager,
+                        ankiTtsManager = ankiTtsManager
                     )
                 }
             }

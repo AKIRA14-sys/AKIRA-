@@ -18,10 +18,15 @@ class SettingsRepository(private val context: Context) {
         val GONKA_BASE_URL = stringPreferencesKey("gonka_base_url")
         val SELECTED_MODEL = stringPreferencesKey("selected_model")
         val SYSTEM_PROMPT = stringPreferencesKey("system_prompt")
+        val TTS_PROVIDER = stringPreferencesKey("tts_provider")
+        val GEMINI_API_KEY = stringPreferencesKey("gemini_api_key")
+        val ELEVENLABS_API_KEY = stringPreferencesKey("elevenlabs_api_key")
+        val ELEVENLABS_VOICE_ID = stringPreferencesKey("elevenlabs_voice_id")
 
         const val DEFAULT_BASE_URL = "https://api.openrouter.ai/v1"
         const val DEFAULT_MODEL = "deepseek/deepseek-r1:free"
-        const val DEFAULT_SYSTEM_PROMPT = "You are AnkiGPT, an elite personal AI assistant equipped with advanced coding capabilities, file analysis, web search skills, and system hardware diagnostic controls."
+        const val DEFAULT_SYSTEM_PROMPT = "You are AnkiGPT, an elite private personal AI assistant equipped with advanced coding capabilities, file analysis, web search skills, and system hardware diagnostic controls."
+        const val DEFAULT_TTS_PROVIDER = "android"
     }
 
     val apiKeyFlow: Flow<String> = context.dataStore.data.map { preferences ->
@@ -38,6 +43,22 @@ class SettingsRepository(private val context: Context) {
 
     val systemPromptFlow: Flow<String> = context.dataStore.data.map { preferences ->
         preferences[SYSTEM_PROMPT] ?: DEFAULT_SYSTEM_PROMPT
+    }
+
+    val ttsProviderFlow: Flow<String> = context.dataStore.data.map { preferences ->
+        preferences[TTS_PROVIDER] ?: DEFAULT_TTS_PROVIDER
+    }
+
+    val geminiApiKeyFlow: Flow<String> = context.dataStore.data.map { preferences ->
+        preferences[GEMINI_API_KEY] ?: ""
+    }
+
+    val elevenLabsApiKeyFlow: Flow<String> = context.dataStore.data.map { preferences ->
+        preferences[ELEVENLABS_API_KEY] ?: ""
+    }
+
+    val elevenLabsVoiceIdFlow: Flow<String> = context.dataStore.data.map { preferences ->
+        preferences[ELEVENLABS_VOICE_ID] ?: "21m00Tcm4TlvDq8ikWAM"
     }
 
     suspend fun saveApiKey(key: String) {
@@ -61,6 +82,30 @@ class SettingsRepository(private val context: Context) {
     suspend fun saveSystemPrompt(prompt: String) {
         context.dataStore.edit { preferences ->
             preferences[SYSTEM_PROMPT] = prompt
+        }
+    }
+
+    suspend fun saveTtsProvider(provider: String) {
+        context.dataStore.edit { preferences ->
+            preferences[TTS_PROVIDER] = provider
+        }
+    }
+
+    suspend fun saveGeminiApiKey(key: String) {
+        context.dataStore.edit { preferences ->
+            preferences[GEMINI_API_KEY] = key
+        }
+    }
+
+    suspend fun saveElevenLabsApiKey(key: String) {
+        context.dataStore.edit { preferences ->
+            preferences[ELEVENLABS_API_KEY] = key
+        }
+    }
+
+    suspend fun saveElevenLabsVoiceId(voiceId: String) {
+        context.dataStore.edit { preferences ->
+            preferences[ELEVENLABS_VOICE_ID] = voiceId
         }
     }
 }
