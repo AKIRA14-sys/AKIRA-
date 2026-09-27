@@ -8,7 +8,9 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.RecordVoiceOver
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Smartphone
 import androidx.compose.material3.*
@@ -21,6 +23,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.ankigpt.app.data.AiProviderManager
+import com.ankigpt.app.data.AiProviderType
 import com.ankigpt.app.data.DeviceControlManager
 import com.ankigpt.app.data.SettingsRepository
 import com.ankigpt.app.data.tts.AnkiTtsManager
@@ -31,6 +35,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun SettingsScreen(
     settingsRepository: SettingsRepository,
+    aiProviderManager: AiProviderManager,
     deviceControlManager: DeviceControlManager,
     ankiTtsManager: AnkiTtsManager
 ) {
@@ -38,34 +43,67 @@ fun SettingsScreen(
     val scope = rememberCoroutineScope()
     val scrollState = rememberScrollState()
 
-    val currentApiKey by settingsRepository.apiKeyFlow.collectAsState(initial = "")
-    val currentBaseUrl by settingsRepository.baseUrlFlow.collectAsState(initial = SettingsRepository.DEFAULT_BASE_URL)
-    val currentModel by settingsRepository.selectedModelFlow.collectAsState(initial = SettingsRepository.DEFAULT_MODEL)
-    val currentSystemPrompt by settingsRepository.systemPromptFlow.collectAsState(initial = SettingsRepository.DEFAULT_SYSTEM_PROMPT)
-    val currentTtsProvider by settingsRepository.ttsProviderFlow.collectAsState(initial = SettingsRepository.DEFAULT_TTS_PROVIDER)
+    val currentProviderStr by settingsRepository.selectedProviderFlow.collectAsState(initial = "OPENROUTER")
+    val currentOpenRouterKey by settingsRepository.openRouterApiKeyFlow.collectAsState(initial = "")
+    val currentGroqKey by settingsRepository.groqApiKeyFlow.collectAsState(initial = "")
     val currentGeminiKey by settingsRepository.geminiApiKeyFlow.collectAsState(initial = "")
+    val currentOpenRouterModel by settingsRepository.openRouterModelFlow.collectAsState(initial = "deepseek/deepseek-r1:free")
+    val currentGroqModel by settingsRepository.groqModelFlow.collectAsState(initial = "llama-3.3-70b-versatile")
+    val currentGeminiModel by settingsRepository.geminiModelFlow.collectAsState(initial = "gemini-1.5-flash")
+    val currentAppLockEnabled by settingsRepository.appLockEnabledFlow.collectAsState(initial = false)
+
+    val currentTtsProvider by settingsRepository.ttsProviderFlow.collectAsState(initial = SettingsRepository.DEFAULT_TTS_PROVIDER)
     val currentElevenLabsKey by settingsRepository.elevenLabsApiKeyFlow.collectAsState(initial = "")
     val currentElevenLabsVoiceId by settingsRepository.elevenLabsVoiceIdFlow.collectAsState(initial = "21m00Tcm4TlvDq8ikWAM")
 
-    var apiKeyInput by remember { mutableStateOf("") }
-    var baseUrlInput by remember { mutableStateOf("") }
-    var modelInput by remember { mutableStateOf("") }
-    var systemPromptInput by remember { mutableStateOf("") }
-    var selectedTtsProvider by remember { mutableStateOf("android") }
+    var selectedProviderType by remember { mutableStateOf(AiProviderType.OPENROUTER) }
+    var openRouterKeyInput by remember { mutableStateOf("") }
+    var groqKeyInput by remember { mutableStateOf("") }
     var geminiKeyInput by remember { mutableStateOf("") }
+    var openRouterModelInput by remember { mutableStateOf("") }
+    var groqModelInput by remember { mutableStateOf("") }
+    var geminiModelInput by remember { mutableStateOf("") }
+    var appLockToggle by remember { mutableStateOf(false) }
+
+    var selectedTtsProvider by remember { mutableStateOf("android") }
     var elevenLabsKeyInput by remember { mutableStateOf("") }
     var elevenLabsVoiceIdInput by remember { mutableStateOf("21m00Tcm4TlvDq8ikWAM") }
     var savedFeedback by remember { mutableStateOf(false) }
 
-    LaunchedEffect(currentApiKey, currentBaseUrl, currentModel, currentSystemPrompt, currentTtsProvider, currentGeminiKey, currentElevenLabsKey, currentElevenLabsVoiceId) {
-        apiKeyInput = currentApiKey
-        baseUrlInput = currentBaseUrl
-        modelInput = currentModel
-        systemPromptInput = currentSystemPrompt
-        selectedTtsProvider = currentTtsProvider
+    var availableModels by remember { mutableStateOf(listOf<String>()) }
+    var isFetchingModels by remember { mutableStateOf(false) }
+
+    fun fetchModelsForCurrentProvider() {
+        isFetchingModels = true
+        scope.launch {
+            val key = when (selectedProviderType) {
+                AiProviderType.OPENROUTER -> openRouterKeyInput
+                AiProviderType.GROQ -> groqKeyInput
+                AiProviderType.GEMINI -> geminiKeyInput
+            }
+            availableModels = aiProviderManager.listAvailableModels(selectedProviderType, key)
+            isFetchingModels = false
+        }
+    }
+
+    LaunchedEffect(currentProviderStr, currentOpenRouterKey, currentGroqKey, currentGeminiKey, currentOpenRouterModel, currentGroqModel, currentGeminiModel, currentTtsProvider, currentElevenLabsKey, currentElevenLabsVoiceId, currentAppLockEnabled) {
+        selectedProviderType = try { AiProviderType.valueOf(currentProviderStr) } catch (_: Exception) { AiProviderType.OPENROUTER }
+        openRouterKeyInput = currentOpenRouterKey
+        groqKeyInput = currentGroqKey
         geminiKeyInput = currentGeminiKey
+        openRouterModelInput = currentOpenRouterModel
+        groqModelInput = currentGroqModel
+        geminiModelInput = currentGeminiModel
+        selectedTtsProvider = currentTtsProvider
         elevenLabsKeyInput = currentElevenLabsKey
         elevenLabsVoiceIdInput = currentElevenLabsVoiceId
+        appLockToggle = currentAppLockEnabled
+
+        fetchModelsForCurrentProvider()
+    }
+
+    LaunchedEffect(selectedProviderType) {
+        fetchModelsForCurrentProvider()
     }
 
     Column(
@@ -82,7 +120,7 @@ fun SettingsScreen(
             fontFamily = FontFamily.Monospace
         )
         Text(
-            text = "Configure Default Assistant role, TTS voice engines, and API keys",
+            text = "Configure Default Assistant role, AI Providers (OpenRouter, Groq, Gemini), Security & App Lock",
             fontSize = 12.sp,
             color = TextSecondary
         )
@@ -99,14 +137,14 @@ fun SettingsScreen(
         ) {
             Column(modifier = Modifier.padding(16.dp)) {
                 Text(
-                    text = "Android Digital Assistant",
+                    text = "A-Anki Android Assistant",
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Bold,
                     color = NeonCyan
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Set AnkiGPT as your default phone assistant to invoke via home-button or gesture from any screen.",
+                    text = "Set AnkiGPT as your default phone assistant to invoke A-Anki via home-button or gesture from any app.",
                     fontSize = 12.sp,
                     color = TextSecondary
                 )
@@ -135,6 +173,93 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
+        // SECURITY & APP LOCK
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(16.dp))
+                .border(1.dp, GlassBorder, RoundedCornerShape(16.dp)),
+            color = GlassSurface
+        ) {
+            Row(
+                modifier = Modifier.padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(imageVector = Icons.Default.Lock, contentDescription = null, tint = NeonCyan)
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column {
+                        Text(text = "Biometric App Lock", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
+                        Text(text = "Protect conversations with Fingerprint/PIN", fontSize = 11.sp, color = TextSecondary)
+                    }
+                }
+                Switch(
+                    checked = appLockToggle,
+                    onCheckedChange = { appLockToggle = it }
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // AI PROVIDER SELECTION & CARDS
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(text = "Active AI Provider", fontSize = 14.sp, color = NeonCyan, fontWeight = FontWeight.Bold)
+            IconButton(onClick = { fetchModelsForCurrentProvider() }) {
+                Icon(imageVector = Icons.Default.Refresh, contentDescription = "Refresh Models", tint = NeonCyan)
+            }
+        }
+        Spacer(modifier = Modifier.height(6.dp))
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+            AiProviderType.entries.forEach { p ->
+                FilterChip(
+                    selected = selectedProviderType == p,
+                    onClick = { selectedProviderType = p },
+                    label = { Text(p.displayName) }
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        when (selectedProviderType) {
+            AiProviderType.OPENROUTER -> ProviderCard(
+                name = "OpenRouter",
+                apiKey = openRouterKeyInput,
+                onKeyChange = { openRouterKeyInput = it },
+                model = openRouterModelInput,
+                onModelChange = { openRouterModelInput = it },
+                availableModels = availableModels,
+                isFetching = isFetchingModels
+            )
+            AiProviderType.GROQ -> ProviderCard(
+                name = "GROQ",
+                apiKey = groqKeyInput,
+                onKeyChange = { groqKeyInput = it },
+                model = groqModelInput,
+                onModelChange = { groqModelInput = it },
+                availableModels = availableModels,
+                isFetching = isFetchingModels
+            )
+            AiProviderType.GEMINI -> ProviderCard(
+                name = "Google Gemini",
+                apiKey = geminiKeyInput,
+                onKeyChange = { geminiKeyInput = it },
+                model = geminiModelInput,
+                onModelChange = { geminiModelInput = it },
+                availableModels = availableModels,
+                isFetching = isFetchingModels
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
         // VOICE & TTS PROVIDER CONFIG
         Text(text = "Voice & Speech Engine (TTS)", fontSize = 14.sp, color = NeonCyan, fontWeight = FontWeight.Bold)
         Spacer(modifier = Modifier.height(6.dp))
@@ -157,21 +282,6 @@ fun SettingsScreen(
             )
         }
 
-        if (selectedTtsProvider == "gemini") {
-            Spacer(modifier = Modifier.height(8.dp))
-            OutlinedTextField(
-                value = geminiKeyInput,
-                onValueChange = { geminiKeyInput = it },
-                placeholder = { Text("Gemini API Key for Cloud TTS", color = TextSecondary) },
-                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = NeonCyan, unfocusedBorderColor = GlassBorder,
-                    focusedContainerColor = GlassSurface, unfocusedContainerColor = GlassSurface
-                ),
-                singleLine = true
-            )
-        }
-
         if (selectedTtsProvider == "elevenlabs") {
             Spacer(modifier = Modifier.height(8.dp))
             OutlinedTextField(
@@ -189,7 +299,7 @@ fun SettingsScreen(
             OutlinedTextField(
                 value = elevenLabsVoiceIdInput,
                 onValueChange = { elevenLabsVoiceIdInput = it },
-                placeholder = { Text("ElevenLabs Voice ID (e.g., 21m00Tcm4TlvDq8ikWAM)", color = TextSecondary) },
+                placeholder = { Text("ElevenLabs Voice ID", color = TextSecondary) },
                 modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = NeonCyan, unfocusedBorderColor = GlassBorder,
@@ -222,50 +332,21 @@ fun SettingsScreen(
             Text(text = "Test Selected Voice", color = TextPrimary)
         }
 
-        Spacer(modifier = Modifier.height(16.dp))
-
-        // GONKA / OPENROUTER API KEY CONFIG
-        Text(text = "Gonka / OpenRouter API Key", fontSize = 13.sp, color = TextPrimary, fontWeight = FontWeight.Bold)
-        Spacer(modifier = Modifier.height(4.dp))
-        OutlinedTextField(
-            value = apiKeyInput,
-            onValueChange = { apiKeyInput = it },
-            placeholder = { Text("Enter Gonka Router API Key", color = TextSecondary) },
-            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = NeonCyan, unfocusedBorderColor = GlassBorder,
-                focusedContainerColor = GlassSurface, unfocusedContainerColor = GlassSurface
-            ),
-            singleLine = true
-        )
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        Text(text = "Target AI Model", fontSize = 13.sp, color = TextPrimary, fontWeight = FontWeight.Bold)
-        Spacer(modifier = Modifier.height(4.dp))
-        OutlinedTextField(
-            value = modelInput,
-            onValueChange = { modelInput = it },
-            placeholder = { Text(SettingsRepository.DEFAULT_MODEL, color = TextSecondary) },
-            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)),
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = NeonCyan, unfocusedBorderColor = GlassBorder,
-                focusedContainerColor = GlassSurface, unfocusedContainerColor = GlassSurface
-            ),
-            singleLine = true
-        )
-
         Spacer(modifier = Modifier.height(20.dp))
 
         Button(
             onClick = {
                 scope.launch {
-                    settingsRepository.saveApiKey(apiKeyInput.trim())
-                    settingsRepository.saveBaseUrl(baseUrlInput.trim())
-                    settingsRepository.saveSelectedModel(modelInput.trim())
-                    settingsRepository.saveSystemPrompt(systemPromptInput.trim())
-                    settingsRepository.saveTtsProvider(selectedTtsProvider)
+                    settingsRepository.saveSelectedProvider(selectedProviderType.name)
+                    settingsRepository.saveOpenRouterApiKey(openRouterKeyInput.trim())
+                    settingsRepository.saveGroqApiKey(groqKeyInput.trim())
                     settingsRepository.saveGeminiApiKey(geminiKeyInput.trim())
+                    settingsRepository.saveOpenRouterModel(openRouterModelInput.trim())
+                    settingsRepository.saveGroqModel(groqModelInput.trim())
+                    settingsRepository.saveGeminiModel(geminiModelInput.trim())
+                    settingsRepository.saveAppLockEnabled(appLockToggle)
+
+                    settingsRepository.saveTtsProvider(selectedTtsProvider)
                     settingsRepository.saveElevenLabsApiKey(elevenLabsKeyInput.trim())
                     settingsRepository.saveElevenLabsVoiceId(elevenLabsVoiceIdInput.trim())
 
@@ -297,12 +378,91 @@ fun SettingsScreen(
                 color = GlassSurface
             ) {
                 Text(
-                    text = "✓ Assistant settings successfully saved!",
+                    text = "✓ Settings successfully updated!",
                     modifier = Modifier.padding(12.dp),
                     color = NeonGreen,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold
                 )
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ProviderCard(
+    name: String,
+    apiKey: String,
+    onKeyChange: (String) -> Unit,
+    model: String,
+    onModelChange: (String) -> Unit,
+    availableModels: List<String>,
+    isFetching: Boolean
+) {
+    var expanded by remember { mutableStateOf(false) }
+
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .border(1.dp, GlassBorder, RoundedCornerShape(16.dp)),
+        color = GlassSurface
+    ) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(text = "$name Credentials & Model", fontSize = 15.sp, fontWeight = FontWeight.Bold, color = NeonCyan)
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedTextField(
+                value = apiKey,
+                onValueChange = onKeyChange,
+                placeholder = { Text("$name API Key", color = TextSecondary) },
+                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = NeonCyan, unfocusedBorderColor = GlassBorder,
+                    focusedContainerColor = DarkSurface, unfocusedContainerColor = DarkSurface
+                ),
+                singleLine = true
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+
+            ExposedDropdownMenuBox(
+                expanded = expanded,
+                onExpandedChange = { expanded = !expanded }
+            ) {
+                OutlinedTextField(
+                    value = model,
+                    onValueChange = onModelChange,
+                    readOnly = false,
+                    label = { Text("Selected Model", color = TextSecondary) },
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+                    modifier = Modifier.menuAnchor().fillMaxWidth().clip(RoundedCornerShape(12.dp)),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = NeonCyan, unfocusedBorderColor = GlassBorder,
+                        focusedContainerColor = DarkSurface, unfocusedContainerColor = DarkSurface
+                    )
+                )
+
+                ExposedDropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false }
+                ) {
+                    if (isFetching) {
+                        DropdownMenuItem(
+                            text = { Text("Fetching models...") },
+                            onClick = {}
+                        )
+                    } else {
+                        availableModels.forEach { m ->
+                            DropdownMenuItem(
+                                text = { Text(m) },
+                                onClick = {
+                                    onModelChange(m)
+                                    expanded = false
+                                }
+                            )
+                        }
+                    }
+                }
             }
         }
     }

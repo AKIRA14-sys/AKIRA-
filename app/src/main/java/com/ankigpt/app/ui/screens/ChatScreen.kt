@@ -1,11 +1,15 @@
 package com.ankigpt.app.ui.screens
 
+import android.app.Activity
+import android.content.Intent
 import android.net.Uri
+import android.speech.RecognizerIntent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -32,37 +36,90 @@ import com.ankigpt.app.data.tts.AnkiTtsManager
 import com.ankigpt.app.ui.theme.*
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.launch
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
     settingsRepository: SettingsRepository,
-    routerApiService: RouterApiService,
+    aiProviderManager: AiProviderManager,
     webSearchService: WebSearchService,
     fileAccessService: FileAccessService,
     deviceControlManager: DeviceControlManager,
     commandRouter: AnkiCommandRouter,
     ankiTtsManager: AnkiTtsManager,
+    historyRepository: HistoryRepository,
+    memoryRepository: MemoryRepository,
+    notificationManager: AnkiNotificationManager,
     onNavigateToCodeStudio: (String) -> Unit
 ) {
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
 
-    val apiKey by settingsRepository.apiKeyFlow.collectAsState(initial = "")
-    val baseUrl by settingsRepository.baseUrlFlow.collectAsState(initial = SettingsRepository.DEFAULT_BASE_URL)
-    val model by settingsRepository.selectedModelFlow.collectAsState(initial = SettingsRepository.DEFAULT_MODEL)
+    val selectedProviderStr by settingsRepository.selectedProviderFlow.collectAsState(initial = "OPENROUTER")
+    val openRouterKey by settingsRepository.openRouterApiKeyFlow.collectAsState(initial = "")
+    val groqKey by settingsRepository.groqApiKeyFlow.collectAsState(initial = "")
+    val geminiKey by settingsRepository.geminiApiKeyFlow.collectAsState(initial = "")
+
+    val openRouterModel by settingsRepository.openRouterModelFlow.collectAsState(initial = "deepseek/deepseek-r1:free")
+    val groqModel by settingsRepository.groqModelFlow.collectAsState(initial = "llama-3.3-70b-versatile")
+    val geminiModel by settingsRepository.geminiModelFlow.collectAsState(initial = "gemini-1.5-flash")
+
     val systemPrompt by settingsRepository.systemPromptFlow.collectAsState(initial = SettingsRepository.DEFAULT_SYSTEM_PROMPT)
     val ttsProviderType by settingsRepository.ttsProviderFlow.collectAsState(initial = SettingsRepository.DEFAULT_TTS_PROVIDER)
-    val geminiApiKey by settingsRepository.geminiApiKeyFlow.collectAsState(initial = "")
     val elevenLabsApiKey by settingsRepository.elevenLabsApiKeyFlow.collectAsState(initial = "")
     val elevenLabsVoiceId by settingsRepository.elevenLabsVoiceIdFlow.collectAsState(initial = "21m00Tcm4TlvDq8ikWAM")
 
+    val savedConversations by historyRepository.conversationsFlow.collectAsState(initial = emptyList())
+    val savedMemories by memoryRepository.memoriesFlow.collectAsState(initial = emptyList())
+
+    val providerType = try { AiProviderType.valueOf(selectedProviderStr) } catch (_: Exception) { AiProviderType.OPENROUTER }
+    val apiKey = when (providerType) {
+        AiProviderType.OPENROUTER -> openRouterKey
+        AiProviderType.GROQ -> groqKey
+        AiProviderType.GEMINI -> geminiKey
+    }
+    val model = when (providerType) {
+        AiProviderType.OPENROUTER -> openRouterModel
+        AiProviderType.GROQ -> groqModel
+        AiProviderType.GEMINI -> geminiModel
+    }
+
+    var currentConversationId by remember { mutableStateOf(java.util.UUID.randomUUID().toString()) }
     var messages by remember { mutableStateOf(listOf<ChatMessage>()) }
     var inputText by remember { mutableStateOf("") }
     var isGenerating by remember { mutableStateOf(false) }
     var isWebSearchActive by remember { mutableStateOf(false) }
     var attachedFileName by remember { mutableStateOf<String?>(null) }
     var attachedFileContent by remember { mutableStateOf<String?>(null) }
+
+    var showHistoryDrawer by remember { mutableStateOf(false) }
+    var showMemoryDrawer by remember { mutableStateOf(false) }
+    var newMemoryInput by remember { mutableStateOf("") }
+
+    val speechRecognizerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            val spokenText = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
+            if (!spokenText.isNullOrBlank()) {
+                inputText = spokenText
+            }
+        }
+    }
+
+    fun startVoiceInput() {
+        try {
+            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
+                putExtra(RecognizerIntent.EXTRA_PROMPT, "Listening... Speak to AnkiGPT")
+            }
+            speechRecognizerLauncher.launch(intent)
+        } catch (e: Exception) {
+            deviceControlManager.triggerVibration(100)
+        }
+    }
 
     val filePickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -82,7 +139,7 @@ fun ChatScreen(
             ankiTtsManager.speak(
                 text = text,
                 selectedProviderType = ttsProviderType,
-                geminiApiKey = geminiApiKey,
+                geminiApiKey = geminiKey,
                 elevenLabsApiKey = elevenLabsApiKey,
                 elevenLabsVoiceId = elevenLabsVoiceId
             )
@@ -110,26 +167,40 @@ fun ChatScreen(
         attachedFileContent = null
         deviceControlManager.triggerVibration(40)
 
-        // Pass through Command Router
+        // Command Router
         val routeResult = commandRouter.processCommand(currentInput)
 
         when (routeResult) {
             is CommandResult.LocalAction -> {
-                messages = messages + ChatMessage("assistant", "⚡ [Local Action] ${routeResult.responseText}")
+                val localMsg = ChatMessage("assistant", "⚡ [Local Action] ${routeResult.responseText}")
+                messages = messages + localMsg
                 speakResponse(routeResult.responseText)
+                scope.launch {
+                    historyRepository.saveConversation(
+                        ChatConversation(
+                            id = currentConversationId,
+                            title = newMessages.firstOrNull()?.content?.take(30) ?: "Chat",
+                            messages = messages
+                        )
+                    )
+                }
             }
             is CommandResult.AiRequest -> {
                 isGenerating = true
                 scope.launch {
                     listState.animateScrollToItem((messages.size - 1).coerceAtLeast(0))
 
-                    var fullUserPrompt = userPrompt
+                    val memoryContext = if (savedMemories.isNotEmpty()) {
+                        "User Saved Memories:\n" + savedMemories.joinToString("\n") { "- ${it.content}" } + "\n\n"
+                    } else ""
+
+                    var fullUserPrompt = memoryContext + userPrompt
                     if (isWebSearchActive) {
                         val searchResults = webSearchService.searchWeb(currentInput)
                         val searchSummary = searchResults.joinToString("\n\n") {
                             "Title: ${it.title}\nURL: ${it.url}\nSnippet: ${it.snippet}"
                         }
-                        fullUserPrompt = "Context from Web Search:\n$searchSummary\n\nUser Question: $userPrompt"
+                        fullUserPrompt += "\n\nContext from Web Search:\n$searchSummary"
                     }
 
                     val apiMessages = newMessages.dropLast(1) + ChatMessage("user", fullUserPrompt)
@@ -138,20 +209,21 @@ fun ChatScreen(
 
                     var assistantResponse = ""
 
-                    routerApiService.streamChatCompletion(
-                        baseUrl = baseUrl,
+                    aiProviderManager.streamChatCompletion(
+                        provider = providerType,
                         apiKey = apiKey,
                         model = model,
                         systemPrompt = systemPrompt,
                         messages = apiMessages
                     ).catch { e ->
                         isGenerating = false
-                        val errorText = "\n⚠️ Error: ${e.localizedMessage ?: "Connection failed. Please verify API Key in Settings."}"
+                        val errorText = "\n⚠️ Error: ${e.localizedMessage ?: "Connection failed."}"
                         messages = messages.toMutableList().apply {
                             if (size > assistantIndex) {
                                 this[assistantIndex] = ChatMessage("assistant", assistantResponse + errorText)
                             }
                         }
+                        notificationManager.showTaskCompletionNotification("AnkiGPT Error", "Task failed: ${e.localizedMessage}")
                     }.collect { chunk ->
                         assistantResponse += chunk
                         messages = messages.toMutableList().apply {
@@ -163,6 +235,15 @@ fun ChatScreen(
                     }
 
                     isGenerating = false
+                    historyRepository.saveConversation(
+                        ChatConversation(
+                            id = currentConversationId,
+                            title = newMessages.firstOrNull()?.content?.take(30) ?: "Chat",
+                            messages = messages
+                        )
+                    )
+                    notificationManager.showTaskCompletionNotification("AnkiGPT Completed", "AI response generation complete.")
+
                     if (assistantResponse.isNotBlank()) {
                         speakResponse(assistantResponse.take(300))
                     }
@@ -209,7 +290,7 @@ fun ChatScreen(
                             fontFamily = FontFamily.Monospace
                         )
                         Text(
-                            text = "Personal Assistant Mode",
+                            text = "${providerType.displayName} ($model)",
                             fontSize = 11.sp,
                             color = TextSecondary
                         )
@@ -217,16 +298,13 @@ fun ChatScreen(
                 }
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .size(10.dp)
-                            .clip(CircleShape)
-                            .background(if (isGenerating) NeonPink else NeonGreen)
-                    )
-                    Spacer(modifier = Modifier.width(10.dp))
-                    IconButton(
-                        onClick = { isWebSearchActive = !isWebSearchActive }
-                    ) {
+                    IconButton(onClick = { showHistoryDrawer = !showHistoryDrawer }) {
+                        Icon(imageVector = Icons.Default.History, contentDescription = "History", tint = NeonCyan)
+                    }
+                    IconButton(onClick = { showMemoryDrawer = !showMemoryDrawer }) {
+                        Icon(imageVector = Icons.Default.Psychology, contentDescription = "Memory", tint = NeonPurple)
+                    }
+                    IconButton(onClick = { isWebSearchActive = !isWebSearchActive }) {
                         Icon(
                             imageVector = Icons.Default.Public,
                             contentDescription = "Web Search",
@@ -237,45 +315,133 @@ fun ChatScreen(
             }
         }
 
-        Spacer(modifier = Modifier.height(10.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
-        // Chat Message Stream
+        // History Drawer Overlay
+        if (showHistoryDrawer) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(180.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .border(1.dp, GlassBorder, RoundedCornerShape(12.dp)),
+                color = DarkSurface
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(text = "Chat History", fontWeight = FontWeight.Bold, color = NeonCyan, fontSize = 14.sp)
+                        TextButton(onClick = {
+                            currentConversationId = java.util.UUID.randomUUID().toString()
+                            messages = emptyList()
+                            showHistoryDrawer = false
+                        }) {
+                            Text("+ New Chat", color = NeonGreen, fontSize = 12.sp)
+                        }
+                    }
+                    LazyColumn(modifier = Modifier.fillMaxSize()) {
+                        items(savedConversations) { c ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        currentConversationId = c.id
+                                        messages = c.messages
+                                        showHistoryDrawer = false
+                                    }
+                                    .padding(vertical = 6.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(text = c.title, color = TextPrimary, fontSize = 13.sp, maxLines = 1)
+                                IconButton(
+                                    onClick = { scope.launch { historyRepository.deleteConversation(c.id) } },
+                                    modifier = Modifier.size(20.dp)
+                                ) {
+                                    Icon(imageVector = Icons.Default.Delete, contentDescription = null, tint = NeonPink, modifier = Modifier.size(14.dp))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+
+        // Memory Drawer Overlay
+        if (showMemoryDrawer) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(200.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .border(1.dp, GlassBorder, RoundedCornerShape(12.dp)),
+                color = DarkSurface
+            ) {
+                Column(modifier = Modifier.padding(12.dp)) {
+                    Text(text = "Saved Memories", fontWeight = FontWeight.Bold, color = NeonPurple, fontSize = 14.sp)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedTextField(
+                            value = newMemoryInput,
+                            onValueChange = { newMemoryInput = it },
+                            placeholder = { Text("Add memory (e.g. I prefer Kotlin)", fontSize = 11.sp) },
+                            modifier = Modifier.weight(1f).height(48.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Button(onClick = {
+                            if (newMemoryInput.isNotBlank()) {
+                                scope.launch {
+                                    memoryRepository.addMemory(newMemoryInput)
+                                    newMemoryInput = ""
+                                }
+                            }
+                        }) {
+                            Text("Save", fontSize = 12.sp)
+                        }
+                    }
+                    LazyColumn(modifier = Modifier.fillMaxSize()) {
+                        items(savedMemories) { m ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(text = "• ${m.content}", color = TextPrimary, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                                IconButton(onClick = { scope.launch { memoryRepository.deleteMemory(m.id) } }, modifier = Modifier.size(20.dp)) {
+                                    Icon(imageVector = Icons.Default.Close, contentDescription = null, tint = NeonPink, modifier = Modifier.size(12.dp))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+        }
+
+        // Chat Messages
         LazyColumn(
             state = listState,
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth(),
+            modifier = Modifier.weight(1f).fillMaxWidth(),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             if (messages.isEmpty()) {
                 item {
                     Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 30.dp),
+                        modifier = Modifier.fillMaxWidth().padding(top = 30.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Image(
                                 painter = painterResource(id = R.drawable.ic_ankigpt_logo),
-                                contentDescription = "AnkiGPT Central Emblem",
-                                modifier = Modifier
-                                    .size(80.dp)
-                                    .clip(RoundedCornerShape(16.dp))
-                                    .border(1.dp, GlassBorder, RoundedCornerShape(16.dp))
+                                contentDescription = "AnkiGPT Emblem",
+                                modifier = Modifier.size(80.dp).clip(RoundedCornerShape(16.dp)).border(1.dp, GlassBorder, RoundedCornerShape(16.dp))
                             )
                             Spacer(modifier = Modifier.height(14.dp))
-                            Text(
-                                text = "AnkiGPT Personal Assistant",
-                                fontSize = 20.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = TextPrimary
-                            )
+                            Text(text = "AnkiGPT Personal AI", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
                             Text(
                                 text = "Try: \"open whatsapp\", \"what's the time\", \"battery percentage\", or ask any complex AI question.",
-                                fontSize = 12.sp,
-                                color = TextSecondary,
-                                modifier = Modifier.padding(horizontal = 32.dp, vertical = 8.dp)
+                                fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(horizontal = 32.dp, vertical = 8.dp)
                             )
                         }
                     }
@@ -293,19 +459,8 @@ fun ChatScreen(
                     Surface(
                         modifier = Modifier
                             .widthIn(max = 320.dp)
-                            .clip(
-                                RoundedCornerShape(
-                                    topStart = 16.dp,
-                                    topEnd = 16.dp,
-                                    bottomStart = if (isUser) 16.dp else 4.dp,
-                                    bottomEnd = if (isUser) 4.dp else 16.dp
-                                )
-                            )
-                            .border(
-                                1.dp,
-                                if (isUser) NeonCyan.copy(alpha = 0.5f) else GlassBorder,
-                                RoundedCornerShape(16.dp)
-                            ),
+                            .clip(RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp, bottomStart = if (isUser) 16.dp else 4.dp, bottomEnd = if (isUser) 4.dp else 16.dp))
+                            .border(1.dp, if (isUser) NeonCyan.copy(alpha = 0.5f) else GlassBorder, RoundedCornerShape(16.dp)),
                         color = if (isUser) DarkSurface else GlassSurface
                     ) {
                         Column(modifier = Modifier.padding(14.dp)) {
@@ -323,37 +478,19 @@ fun ChatScreen(
 
                                 if (!isUser) {
                                     Row {
-                                        IconButton(
-                                            onClick = { speakResponse(msg.content) },
-                                            modifier = Modifier.size(24.dp)
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Default.VolumeUp,
-                                                contentDescription = "Read Aloud",
-                                                tint = TextSecondary,
-                                                modifier = Modifier.size(16.dp)
-                                            )
+                                        IconButton(onClick = { speakResponse(msg.content) }, modifier = Modifier.size(24.dp)) {
+                                            Icon(imageVector = Icons.Default.VolumeUp, contentDescription = "Read Aloud", tint = TextSecondary, modifier = Modifier.size(16.dp))
                                         }
                                         if (isCode) {
                                             Spacer(modifier = Modifier.width(6.dp))
-                                            IconButton(
-                                                onClick = { onNavigateToCodeStudio(msg.content) },
-                                                modifier = Modifier.size(24.dp)
-                                            ) {
-                                                Icon(
-                                                    imageVector = Icons.Default.Code,
-                                                    contentDescription = "Code Studio",
-                                                    tint = NeonCyan,
-                                                    modifier = Modifier.size(16.dp)
-                                                )
+                                            IconButton(onClick = { onNavigateToCodeStudio(msg.content) }, modifier = Modifier.size(24.dp)) {
+                                                Icon(imageVector = Icons.Default.Code, contentDescription = "Code Studio", tint = NeonCyan, modifier = Modifier.size(16.dp))
                                             }
                                         }
                                     }
                                 }
                             }
-
                             Spacer(modifier = Modifier.height(6.dp))
-
                             Text(
                                 text = msg.content,
                                 fontSize = 14.sp,
@@ -366,92 +503,51 @@ fun ChatScreen(
             }
         }
 
-        // Attached File Indicator
-        attachedFileName?.let { name ->
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 4.dp)
-                    .clip(RoundedCornerShape(8.dp)),
-                color = DarkSurface
-            ) {
-                Row(
-                    modifier = Modifier.padding(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(imageVector = Icons.Default.AttachFile, contentDescription = null, tint = NeonCyan)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(text = name, fontSize = 12.sp, color = TextPrimary)
-                    }
-                    IconButton(onClick = {
-                        attachedFileName = null
-                        attachedFileContent = null
-                    }) {
-                        Icon(imageVector = Icons.Default.Close, contentDescription = "Remove File", tint = NeonPink)
-                    }
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(6.dp))
-
-        // Input Controls & Actions
+        // Input Controls & Microphone
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(
                 onClick = { filePickerLauncher.launch("*/*") },
-                modifier = Modifier
-                    .size(48.dp)
-                    .clip(CircleShape)
-                    .background(GlassSurface)
+                modifier = Modifier.size(44.dp).clip(CircleShape).background(GlassSurface)
             ) {
-                Icon(
-                    imageVector = Icons.Default.Add,
-                    contentDescription = "Attach File",
-                    tint = NeonCyan
-                )
+                Icon(imageVector = Icons.Default.Add, contentDescription = "Attach File", tint = NeonCyan)
             }
 
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.width(6.dp))
+
+            IconButton(
+                onClick = { startVoiceInput() },
+                modifier = Modifier.size(44.dp).clip(CircleShape).background(GlassSurface)
+            ) {
+                Icon(imageVector = Icons.Default.Mic, contentDescription = "Voice Input", tint = NeonPink)
+            }
+
+            Spacer(modifier = Modifier.width(6.dp))
 
             OutlinedTextField(
                 value = inputText,
                 onValueChange = { inputText = it },
                 placeholder = { Text("Ask AnkiGPT...", color = TextSecondary) },
-                modifier = Modifier
-                    .weight(1f)
-                    .clip(RoundedCornerShape(24.dp)),
+                modifier = Modifier.weight(1f).clip(RoundedCornerShape(24.dp)),
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = NeonCyan,
-                    unfocusedBorderColor = GlassBorder,
-                    focusedContainerColor = GlassSurface,
-                    unfocusedContainerColor = GlassSurface
+                    focusedBorderColor = NeonCyan, unfocusedBorderColor = GlassBorder,
+                    focusedContainerColor = GlassSurface, unfocusedContainerColor = GlassSurface
                 ),
                 maxLines = 4
             )
 
-            Spacer(modifier = Modifier.width(8.dp))
+            Spacer(modifier = Modifier.width(6.dp))
 
             IconButton(
                 onClick = { processUserInput(inputText) },
                 enabled = !isGenerating && (inputText.isNotBlank() || attachedFileContent != null),
-                modifier = Modifier
-                    .size(48.dp)
-                    .clip(CircleShape)
-                    .background(
-                        brush = if (isGenerating) Brush.linearGradient(listOf(GlassSurface, GlassSurface)) else Brush.linearGradient(listOf(NeonCyan, NeonPurple)),
-                        shape = CircleShape
-                    )
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Send,
-                    contentDescription = "Send",
-                    tint = DarkBackground
+                modifier = Modifier.size(44.dp).clip(CircleShape).background(
+                    brush = if (isGenerating) Brush.linearGradient(listOf(GlassSurface, GlassSurface)) else Brush.linearGradient(listOf(NeonCyan, NeonPurple))
                 )
+            ) {
+                Icon(imageVector = Icons.Default.Send, contentDescription = "Send", tint = DarkBackground)
             }
         }
     }
