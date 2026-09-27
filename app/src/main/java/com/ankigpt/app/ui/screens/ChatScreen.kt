@@ -1,9 +1,15 @@
 package com.ankigpt.app.ui.screens
 
+import android.Manifest
 import android.app.Activity
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Bundle
+import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -25,11 +31,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import com.ankigpt.app.R
 import com.ankigpt.app.data.*
 import com.ankigpt.app.data.tts.AnkiTtsManager
@@ -53,6 +61,7 @@ fun ChatScreen(
     notificationManager: AnkiNotificationManager,
     onNavigateToCodeStudio: (String) -> Unit
 ) {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
 
@@ -89,6 +98,7 @@ fun ChatScreen(
     var messages by remember { mutableStateOf(listOf<ChatMessage>()) }
     var inputText by remember { mutableStateOf("") }
     var isGenerating by remember { mutableStateOf(false) }
+    var isListeningVoice by remember { mutableStateOf(false) }
     var isWebSearchActive by remember { mutableStateOf(false) }
     var attachedFileName by remember { mutableStateOf<String?>(null) }
     var attachedFileContent by remember { mutableStateOf<String?>(null) }
@@ -97,27 +107,115 @@ fun ChatScreen(
     var showMemoryDrawer by remember { mutableStateOf(false) }
     var newMemoryInput by remember { mutableStateOf("") }
 
+    // Persistent SpeechRecognizer instance retained across Compose lifecycle
+    var persistentSpeechRecognizer by remember { mutableStateOf<SpeechRecognizer?>(null) }
+
+    DisposableEffect(context) {
+        if (SpeechRecognizer.isRecognitionAvailable(context)) {
+            persistentSpeechRecognizer = SpeechRecognizer.createSpeechRecognizer(context)
+        }
+        onDispose {
+            persistentSpeechRecognizer?.destroy()
+            persistentSpeechRecognizer = null
+        }
+    }
+
     val speechRecognizerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
     ) { result ->
+        isListeningVoice = false
         if (result.resultCode == Activity.RESULT_OK) {
             val spokenText = result.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
             if (!spokenText.isNullOrBlank()) {
                 inputText = spokenText
+                deviceControlManager.triggerVibration(40)
             }
         }
     }
 
-    fun startVoiceInput() {
+    fun startNativeSpeechRecognizer() {
+        val recognizer = persistentSpeechRecognizer
+        if (recognizer == null || !SpeechRecognizer.isRecognitionAvailable(context)) {
+            Toast.makeText(context, "Speech recognition is not available on this device.", Toast.LENGTH_SHORT).show()
+            isListeningVoice = false
+            return
+        }
+
         try {
+            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
+            }
+
+            recognizer.setRecognitionListener(object : RecognitionListener {
+                override fun onReadyForSpeech(params: Bundle?) {}
+                override fun onBeginningOfSpeech() {}
+                override fun onRmsChanged(rmsdB: Float) {}
+                override fun onBufferReceived(buffer: ByteArray?) {}
+                override fun onEndOfSpeech() {
+                    isListeningVoice = false
+                }
+                override fun onError(error: Int) {
+                    isListeningVoice = false
+                    Toast.makeText(context, "Speech recognition error ($error)", Toast.LENGTH_SHORT).show()
+                }
+                override fun onResults(results: Bundle?) {
+                    isListeningVoice = false
+                    val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                    val spoken = matches?.firstOrNull()
+                    if (!spoken.isNullOrBlank()) {
+                        inputText = spoken
+                        deviceControlManager.triggerVibration(40)
+                    }
+                }
+                override fun onPartialResults(partialResults: Bundle?) {}
+                override fun onEvent(eventType: Int, params: Bundle?) {}
+            })
+
+            isListeningVoice = true
+            recognizer.startListening(intent)
+        } catch (e: Exception) {
+            isListeningVoice = false
+            Toast.makeText(context, "Failed to start microphone: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val audioPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
             val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
                 putExtra(RecognizerIntent.EXTRA_PROMPT, "Listening... Speak to AnkiGPT")
             }
-            speechRecognizerLauncher.launch(intent)
-        } catch (e: Exception) {
+            try {
+                isListeningVoice = true
+                speechRecognizerLauncher.launch(intent)
+            } catch (e: Exception) {
+                startNativeSpeechRecognizer()
+            }
+        } else {
             deviceControlManager.triggerVibration(100)
+            Toast.makeText(context, "Microphone permission is required for voice input.", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun startVoiceInput() {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
+            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
+                putExtra(RecognizerIntent.EXTRA_PROMPT, "Listening... Speak to AnkiGPT")
+            }
+            try {
+                isListeningVoice = true
+                speechRecognizerLauncher.launch(intent)
+            } catch (e: Exception) {
+                startNativeSpeechRecognizer()
+            }
+        } else {
+            audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
         }
     }
 
@@ -519,9 +617,9 @@ fun ChatScreen(
 
             IconButton(
                 onClick = { startVoiceInput() },
-                modifier = Modifier.size(44.dp).clip(CircleShape).background(GlassSurface)
+                modifier = Modifier.size(44.dp).clip(CircleShape).background(if (isListeningVoice) NeonPink else GlassSurface)
             ) {
-                Icon(imageVector = Icons.Default.Mic, contentDescription = "Voice Input", tint = NeonPink)
+                Icon(imageVector = Icons.Default.Mic, contentDescription = "Voice Input", tint = if (isListeningVoice) DarkBackground else NeonPink)
             }
 
             Spacer(modifier = Modifier.width(6.dp))
@@ -529,7 +627,7 @@ fun ChatScreen(
             OutlinedTextField(
                 value = inputText,
                 onValueChange = { inputText = it },
-                placeholder = { Text("Ask AnkiGPT...", color = TextSecondary) },
+                placeholder = { Text(if (isListeningVoice) "Listening..." else "Ask AnkiGPT...", color = TextSecondary) },
                 modifier = Modifier.weight(1f).clip(RoundedCornerShape(24.dp)),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = NeonCyan, unfocusedBorderColor = GlassBorder,
