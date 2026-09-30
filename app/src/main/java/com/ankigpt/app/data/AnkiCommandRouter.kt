@@ -18,11 +18,13 @@ class AnkiCommandRouter(
         val cleanInput = input.trim()
         var lower = cleanInput.lowercase()
 
-        // Clean prefix "hey anki" or "anki" with punctuation like commas/colons
-        if (lower.startsWith("hey anki")) {
-            lower = lower.removePrefix("hey anki")
-        } else if (lower.startsWith("anki")) {
-            lower = lower.removePrefix("anki")
+        // Strip prefixes: "a-anki", "a anki", "hey anki", "anki"
+        val prefixes = listOf("a-anki", "a anki", "hey anki", "anki")
+        for (prefix in prefixes) {
+            if (lower.startsWith(prefix)) {
+                lower = lower.removePrefix(prefix)
+                break
+            }
         }
         lower = lower.replace(Regex("^[^a-z0-9]+"), "").replace(Regex("[?.!]+$"), "").trim()
 
@@ -46,10 +48,10 @@ class AnkiCommandRouter(
             return CommandResult.LocalAction("Your battery is at $pct% $charging.", true)
         }
 
-        // 4. Open app command
-        if (lower.startsWith("open ") && !lower.startsWith("open http")) {
-            val targetApp = lower.removePrefix("open ").trim()
-            if (targetApp == "settings" || targetApp == "whatsapp" || targetApp == "chrome" || targetApp == "youtube" || targetApp == "google" || targetApp.length > 1) {
+        // 4. Open app command ("open whatsapp", "launch chrome", "start youtube")
+        if (lower.startsWith("open ") || lower.startsWith("launch ") || lower.startsWith("start ")) {
+            val targetApp = lower.removePrefix("open ").removePrefix("launch ").removePrefix("start ").trim()
+            if (targetApp.isNotBlank() && !targetApp.startsWith("http")) {
                 if (appResolver != null) {
                     val (success, msg) = appResolver.launchAppByName(targetApp)
                     return CommandResult.LocalAction(msg, success)
