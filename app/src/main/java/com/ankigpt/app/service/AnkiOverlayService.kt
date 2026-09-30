@@ -51,10 +51,10 @@ class AnkiOverlayService : Service() {
         }
 
         val bubbleView = TextView(this).apply {
-            text = "⚡ Hey Anki"
+            text = "⚡ Anki Voice"
             setBackgroundColor(Color.parseColor("#121829"))
             setTextColor(Color.parseColor("#00F0FF"))
-            setPadding(32, 20, 32, 20)
+            setPadding(36, 24, 36, 24)
             textSize = 14f
         }
 
@@ -83,7 +83,7 @@ class AnkiOverlayService : Service() {
                     val diffY = Math.abs(event.rawY - initialTouchY)
                     if (diffX < 10 && diffY < 10) {
                         val launchIntent = Intent(this, MainActivity::class.java).apply {
-                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
                         }
                         startActivity(launchIntent)
                     }
