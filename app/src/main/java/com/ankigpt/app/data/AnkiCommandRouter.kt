@@ -18,8 +18,8 @@ class AnkiCommandRouter(
         val cleanInput = input.trim()
         var lower = cleanInput.lowercase()
 
-        // Strip prefixes: "a-anki", "a anki", "hey anki", "anki"
-        val prefixes = listOf("a-anki", "a anki", "hey anki", "anki")
+        // Recognized wake phrase prefixes: "hello anki", "hi anki", "hey anki", "a-anki", "a anki", "anki"
+        val prefixes = listOf("hello anki", "hi anki", "hey anki", "a-anki", "a anki", "anki")
         for (prefix in prefixes) {
             if (lower.startsWith(prefix)) {
                 lower = lower.removePrefix(prefix)

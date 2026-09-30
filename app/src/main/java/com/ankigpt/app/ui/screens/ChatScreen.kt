@@ -4,8 +4,11 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -31,6 +34,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontFamily
@@ -41,6 +45,7 @@ import androidx.core.content.ContextCompat
 import com.ankigpt.app.R
 import com.ankigpt.app.data.*
 import com.ankigpt.app.data.tts.AnkiTtsManager
+import com.ankigpt.app.service.AnkiOverlayService
 import com.ankigpt.app.ui.theme.*
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.launch
@@ -102,23 +107,11 @@ fun ChatScreen(
     var isWebSearchActive by remember { mutableStateOf(false) }
     var attachedFileName by remember { mutableStateOf<String?>(null) }
     var attachedFileContent by remember { mutableStateOf<String?>(null) }
+    var capturedImageBitmap by remember { mutableStateOf<Bitmap?>(null) }
 
     var showHistoryDrawer by remember { mutableStateOf(false) }
     var showMemoryDrawer by remember { mutableStateOf(false) }
     var newMemoryInput by remember { mutableStateOf("") }
-
-    // Persistent SpeechRecognizer instance retained across Compose lifecycle
-    var persistentSpeechRecognizer by remember { mutableStateOf<SpeechRecognizer?>(null) }
-
-    DisposableEffect(context) {
-        if (SpeechRecognizer.isRecognitionAvailable(context)) {
-            persistentSpeechRecognizer = SpeechRecognizer.createSpeechRecognizer(context)
-        }
-        onDispose {
-            persistentSpeechRecognizer?.destroy()
-            persistentSpeechRecognizer = null
-        }
-    }
 
     val speechRecognizerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.StartActivityForResult()
@@ -134,14 +127,14 @@ fun ChatScreen(
     }
 
     fun startNativeSpeechRecognizer() {
-        val recognizer = persistentSpeechRecognizer
-        if (recognizer == null || !SpeechRecognizer.isRecognitionAvailable(context)) {
-            Toast.makeText(context, "Speech recognition is not available on this device.", Toast.LENGTH_SHORT).show()
+        if (!SpeechRecognizer.isRecognitionAvailable(context)) {
+            Toast.makeText(context, "Speech recognition unavailable on this device.", Toast.LENGTH_SHORT).show()
             isListeningVoice = false
             return
         }
 
         try {
+            val recognizer = SpeechRecognizer.createSpeechRecognizer(context)
             val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
                 putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
@@ -157,7 +150,8 @@ fun ChatScreen(
                 }
                 override fun onError(error: Int) {
                     isListeningVoice = false
-                    Toast.makeText(context, "Speech recognition error ($error)", Toast.LENGTH_SHORT).show()
+                    try { recognizer.destroy() } catch (_: Exception) {}
+                    Toast.makeText(context, "Voice input error ($error). Try again.", Toast.LENGTH_SHORT).show()
                 }
                 override fun onResults(results: Bundle?) {
                     isListeningVoice = false
@@ -167,6 +161,7 @@ fun ChatScreen(
                         inputText = spoken
                         deviceControlManager.triggerVibration(40)
                     }
+                    try { recognizer.destroy() } catch (_: Exception) {}
                 }
                 override fun onPartialResults(partialResults: Bundle?) {}
                 override fun onEvent(eventType: Int, params: Bundle?) {}
@@ -176,7 +171,7 @@ fun ChatScreen(
             recognizer.startListening(intent)
         } catch (e: Exception) {
             isListeningVoice = false
-            Toast.makeText(context, "Failed to start microphone: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Microphone error: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -184,12 +179,12 @@ fun ChatScreen(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         if (isGranted) {
-            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
-                putExtra(RecognizerIntent.EXTRA_PROMPT, "Listening... Speak to AnkiGPT")
-            }
             try {
+                val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
+                    putExtra(RecognizerIntent.EXTRA_PROMPT, "Listening... Speak to AnkiGPT")
+                }
                 isListeningVoice = true
                 speechRecognizerLauncher.launch(intent)
             } catch (e: Exception) {
@@ -203,31 +198,113 @@ fun ChatScreen(
 
     fun startVoiceInput() {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
-                putExtra(RecognizerIntent.EXTRA_PROMPT, "Listening... Speak to AnkiGPT")
-            }
             try {
+                val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                    putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
+                    putExtra(RecognizerIntent.EXTRA_PROMPT, "Listening... Speak to AnkiGPT")
+                }
                 isListeningVoice = true
                 speechRecognizerLauncher.launch(intent)
             } catch (e: Exception) {
                 startNativeSpeechRecognizer()
             }
         } else {
-            audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            try {
+                audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+            } catch (e: Exception) {
+                Toast.makeText(context, "Could not request audio permission.", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
-    val filePickerLauncher = rememberLauncherForActivityResult(
+    // OpenDocument file picker contract (supported across all Android devices)
+    val documentPickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri: Uri? ->
+        uri?.let {
+            scope.launch {
+                try {
+                    val (fileName, content) = fileAccessService.readFileContentFromUri(it)
+                    attachedFileName = fileName
+                    attachedFileContent = content
+                    deviceControlManager.triggerVibration(50)
+                } catch (e: Exception) {
+                    Toast.makeText(context, "Error selecting file: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    // Fallback GetContent file picker
+    val getContentPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
         uri?.let {
             scope.launch {
-                val (fileName, content) = fileAccessService.readFileContentFromUri(it)
-                attachedFileName = fileName
-                attachedFileContent = content
-                deviceControlManager.triggerVibration(50)
+                try {
+                    val (fileName, content) = fileAccessService.readFileContentFromUri(it)
+                    attachedFileName = fileName
+                    attachedFileContent = content
+                    deviceControlManager.triggerVibration(50)
+                } catch (e: Exception) {
+                    Toast.makeText(context, "Error selecting file: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    fun safeLaunchFilePicker() {
+        try {
+            documentPickerLauncher.launch(arrayOf("*/*"))
+        } catch (e: Exception) {
+            try {
+                getContentPickerLauncher.launch("*/*")
+            } catch (e2: Exception) {
+                Toast.makeText(context, "No compatible file picker found on device.", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    // Camera Capture Launcher
+    val cameraCaptureLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicturePreview()
+    ) { bitmap: Bitmap? ->
+        if (bitmap != null) {
+            capturedImageBitmap = bitmap
+            attachedFileName = "camera_captured_photo.jpg"
+            attachedFileContent = "[Captured Image Attached for AI Analysis]"
+            deviceControlManager.triggerVibration(60)
+            Toast.makeText(context, "Photo captured successfully!", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            try {
+                cameraCaptureLauncher.launch(null)
+            } catch (e: Exception) {
+                Toast.makeText(context, "Failed to launch camera: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            Toast.makeText(context, "Camera permission is required to capture photos.", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    fun safeLaunchCamera() {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+            try {
+                cameraCaptureLauncher.launch(null)
+            } catch (e: Exception) {
+                Toast.makeText(context, "Failed to open camera.", Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            try {
+                cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+            } catch (e: Exception) {
+                Toast.makeText(context, "Could not request camera permission.", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -244,12 +321,34 @@ fun ChatScreen(
         }
     }
 
+    fun toggleOverlayService() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(context)) {
+            try {
+                val intent = Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:${context.packageName}")
+                )
+                context.startActivity(intent)
+            } catch (e: Exception) {
+                Toast.makeText(context, "Grant 'Display over other apps' in Settings", Toast.LENGTH_SHORT).show()
+            }
+        } else {
+            try {
+                val intent = Intent(context, AnkiOverlayService::class.java)
+                context.startService(intent)
+                Toast.makeText(context, "Hey Anki Overlay Activated!", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Toast.makeText(context, "Failed to start overlay: ${e.localizedMessage}", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     fun processUserInput(promptText: String) {
-        if (promptText.isBlank() && attachedFileContent == null) return
+        if (promptText.isBlank() && attachedFileContent == null && capturedImageBitmap == null) return
 
         val userPrompt = buildString {
             if (attachedFileName != null && attachedFileContent != null) {
-                append("[ATTACHED FILE: $attachedFileName]\n```\n$attachedFileContent\n```\n\n")
+                append("[ATTACHED FILE/IMAGE: $attachedFileName]\n```\n$attachedFileContent\n```\n\n")
             }
             append(promptText.trim())
         }
@@ -263,6 +362,7 @@ fun ChatScreen(
         inputText = ""
         attachedFileName = null
         attachedFileContent = null
+        capturedImageBitmap = null
         deviceControlManager.triggerVibration(40)
 
         // Command Router
@@ -517,6 +617,49 @@ fun ChatScreen(
             Spacer(modifier = Modifier.height(8.dp))
         }
 
+        // Attached File/Image Preview Bar
+        if (attachedFileName != null || capturedImageBitmap != null) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .border(1.dp, NeonCyan, RoundedCornerShape(8.dp)),
+                color = GlassSurface
+            ) {
+                Row(
+                    modifier = Modifier.padding(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (capturedImageBitmap != null) {
+                            Image(
+                                bitmap = capturedImageBitmap!!.asImageBitmap(),
+                                contentDescription = "Captured Photo",
+                                modifier = Modifier.size(36.dp).clip(RoundedCornerShape(4.dp))
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                        } else {
+                            Icon(imageVector = Icons.Default.AttachFile, contentDescription = null, tint = NeonCyan)
+                            Spacer(modifier = Modifier.width(8.dp))
+                        }
+                        Text(text = attachedFileName ?: "Attached Image", fontSize = 12.sp, color = TextPrimary, maxLines = 1)
+                    }
+                    IconButton(
+                        onClick = {
+                            attachedFileName = null
+                            attachedFileContent = null
+                            capturedImageBitmap = null
+                        },
+                        modifier = Modifier.size(24.dp)
+                    ) {
+                        Icon(imageVector = Icons.Default.Close, contentDescription = "Remove", tint = NeonPink)
+                    }
+                }
+            }
+        }
+
         // Chat Messages
         LazyColumn(
             state = listState,
@@ -526,7 +669,7 @@ fun ChatScreen(
             if (messages.isEmpty()) {
                 item {
                     Box(
-                        modifier = Modifier.fillMaxWidth().padding(top = 30.dp),
+                        modifier = Modifier.fillMaxWidth().padding(top = 20.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -535,12 +678,35 @@ fun ChatScreen(
                                 contentDescription = "AnkiGPT Emblem",
                                 modifier = Modifier.size(80.dp).clip(RoundedCornerShape(16.dp)).border(1.dp, GlassBorder, RoundedCornerShape(16.dp))
                             )
-                            Spacer(modifier = Modifier.height(14.dp))
+                            Spacer(modifier = Modifier.height(12.dp))
                             Text(text = "AnkiGPT Personal AI", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = TextPrimary)
                             Text(
-                                text = "Try: \"open whatsapp\", \"what's the time\", \"battery percentage\", or ask any complex AI question.",
-                                fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(horizontal = 32.dp, vertical = 8.dp)
+                                text = "Try: \"open whatsapp\", \"hello anki\", \"what's the time\", or ask any question.",
+                                fontSize = 12.sp, color = TextSecondary, modifier = Modifier.padding(horizontal = 32.dp, vertical = 6.dp)
                             )
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                OutlinedButton(
+                                    onClick = {
+                                        try {
+                                            val intent = Intent(Settings.ACTION_VOICE_INPUT_SETTINGS)
+                                            context.startActivity(intent)
+                                        } catch (e: Exception) {
+                                            Toast.makeText(context, "Open Assistant Settings in Android Settings", Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = NeonCyan)
+                                ) {
+                                    Text("Default Assistant", fontSize = 11.sp)
+                                }
+
+                                OutlinedButton(
+                                    onClick = { toggleOverlayService() },
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = NeonPurple)
+                                ) {
+                                    Text("Display Over Apps", fontSize = 11.sp)
+                                }
+                            }
                         }
                     }
                 }
@@ -607,27 +773,36 @@ fun ChatScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(
-                onClick = { filePickerLauncher.launch("*/*") },
-                modifier = Modifier.size(44.dp).clip(CircleShape).background(GlassSurface)
+                onClick = { safeLaunchFilePicker() },
+                modifier = Modifier.size(40.dp).clip(CircleShape).background(GlassSurface)
             ) {
                 Icon(imageVector = Icons.Default.Add, contentDescription = "Attach File", tint = NeonCyan)
             }
 
-            Spacer(modifier = Modifier.width(6.dp))
+            Spacer(modifier = Modifier.width(4.dp))
+
+            IconButton(
+                onClick = { safeLaunchCamera() },
+                modifier = Modifier.size(40.dp).clip(CircleShape).background(GlassSurface)
+            ) {
+                Icon(imageVector = Icons.Default.CameraAlt, contentDescription = "Capture Camera Photo", tint = NeonGreen)
+            }
+
+            Spacer(modifier = Modifier.width(4.dp))
 
             IconButton(
                 onClick = { startVoiceInput() },
-                modifier = Modifier.size(44.dp).clip(CircleShape).background(if (isListeningVoice) NeonPink else GlassSurface)
+                modifier = Modifier.size(40.dp).clip(CircleShape).background(if (isListeningVoice) NeonPink else GlassSurface)
             ) {
                 Icon(imageVector = Icons.Default.Mic, contentDescription = "Voice Input", tint = if (isListeningVoice) DarkBackground else NeonPink)
             }
 
-            Spacer(modifier = Modifier.width(6.dp))
+            Spacer(modifier = Modifier.width(4.dp))
 
             OutlinedTextField(
                 value = inputText,
                 onValueChange = { inputText = it },
-                placeholder = { Text(if (isListeningVoice) "Listening..." else "Ask AnkiGPT...", color = TextSecondary) },
+                placeholder = { Text(if (isListeningVoice) "Listening..." else "Ask AnkiGPT...", color = TextSecondary, fontSize = 12.sp) },
                 modifier = Modifier.weight(1f).clip(RoundedCornerShape(24.dp)),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = NeonCyan, unfocusedBorderColor = GlassBorder,
@@ -636,12 +811,12 @@ fun ChatScreen(
                 maxLines = 4
             )
 
-            Spacer(modifier = Modifier.width(6.dp))
+            Spacer(modifier = Modifier.width(4.dp))
 
             IconButton(
                 onClick = { processUserInput(inputText) },
-                enabled = !isGenerating && (inputText.isNotBlank() || attachedFileContent != null),
-                modifier = Modifier.size(44.dp).clip(CircleShape).background(
+                enabled = !isGenerating && (inputText.isNotBlank() || attachedFileContent != null || capturedImageBitmap != null),
+                modifier = Modifier.size(40.dp).clip(CircleShape).background(
                     brush = if (isGenerating) Brush.linearGradient(listOf(GlassSurface, GlassSurface)) else Brush.linearGradient(listOf(NeonCyan, NeonPurple))
                 )
             ) {
