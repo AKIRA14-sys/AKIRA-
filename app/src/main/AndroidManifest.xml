@@ -9,6 +9,11 @@
     <uses-permission android:name="android.permission.FLASHLIGHT" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
@@ -62,6 +67,7 @@
             android:name=".service.AnkiVoiceInteractionService"
             android:label="AnkiGPT Voice Assistant"
             android:permission="android.permission.BIND_VOICE_INTERACTION"
+            android:foregroundServiceType="microphone"
             android:exported="true">
             <meta-data
                 android:name="android.voice_interaction"
@@ -75,6 +81,11 @@
             android:name=".service.AnkiVoiceInteractionSessionService"
             android:permission="android.permission.BIND_VOICE_INTERACTION"
             android:exported="true" />
+
+        <service
+            android:name=".service.AnkiOverlayService"
+            android:enabled="true"
+            android:exported="false" />
 
     </application>
 

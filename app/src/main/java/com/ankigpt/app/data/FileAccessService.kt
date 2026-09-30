@@ -19,24 +19,35 @@ data class LocalFileInfo(
 class FileAccessService(private val context: Context) {
 
     suspend fun readFileContentFromUri(uri: Uri): Pair<String, String> = withContext(Dispatchers.IO) {
-        var fileName = "unknown_file"
-        context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-            val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-            if (cursor.moveToFirst() && nameIndex != -1) {
-                fileName = cursor.getString(nameIndex)
+        var fileName = "selected_file"
+        try {
+            context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (cursor.moveToFirst() && nameIndex != -1) {
+                    val name = cursor.getString(nameIndex)
+                    if (!name.isNullOrBlank()) {
+                        fileName = name
+                    }
+                }
             }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
 
         val stringBuilder = StringBuilder()
-        context.contentResolver.openInputStream(uri)?.use { inputStream ->
-            BufferedReader(InputStreamReader(inputStream)).use { reader ->
-                var line: String?
-                var lineCount = 0
-                while (reader.readLine().also { line = it } != null && lineCount < 2000) {
-                    stringBuilder.append(line).append("\n")
-                    lineCount++
+        try {
+            context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                BufferedReader(InputStreamReader(inputStream)).use { reader ->
+                    var line: String?
+                    var lineCount = 0
+                    while (reader.readLine().also { line = it } != null && lineCount < 2000) {
+                        stringBuilder.append(line).append("\n")
+                        lineCount++
+                    }
                 }
             }
+        } catch (e: Exception) {
+            stringBuilder.append("[File Content Error: ${e.localizedMessage}]")
         }
 
         return@withContext Pair(fileName, stringBuilder.toString())
@@ -72,13 +83,17 @@ class FileAccessService(private val context: Context) {
         }
 
         val sb = StringBuilder()
-        file.bufferedReader().use { reader ->
-            var line: String?
-            var count = 0
-            while (reader.readLine().also { line = it } != null && count < 2000) {
-                sb.append(line).append("\n")
-                count++
+        try {
+            file.bufferedReader().use { reader ->
+                var line: String?
+                var count = 0
+                while (reader.readLine().also { line = it } != null && count < 2000) {
+                    sb.append(line).append("\n")
+                    count++
+                }
             }
+        } catch (e: Exception) {
+            sb.append("[File Read Error: ${e.localizedMessage}]")
         }
         return@withContext sb.toString()
     }
